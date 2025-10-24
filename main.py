@@ -12,6 +12,7 @@ import shutil
 import time
 import signal
 import sys
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -38,6 +39,8 @@ class AutoSaveMonitor:
         """Handle shutdown signals gracefully."""
         print(f"\nReceived signal {signum}. Shutting down gracefully...")
         self.running = False
+        # Force exit to avoid waiting for sleep
+        sys.exit(0)
     
     def is_game_running(self) -> bool:
         """Check if Silksong game process is running using pgrep."""
@@ -48,10 +51,65 @@ class AutoSaveMonitor:
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return False
     
+    def get_file_hash(self, file_path: Path) -> Optional[str]:
+        """Calculate MD5 hash of a file for comparison."""
+        try:
+            hash_md5 = hashlib.md5()
+            with open(file_path, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_md5.update(chunk)
+            return hash_md5.hexdigest()
+        except Exception as e:
+            print(f"Error calculating hash for {file_path}: {e}")
+            return None
+    
+    def get_latest_backup_hash(self) -> Optional[str]:
+        """Get hash of the most recent backup file for comparison."""
+        if not self.backup_dir.exists():
+            return None
+        
+        # Get all backup folders and sort by name (timestamp) - newest first
+        backup_folders = [f for f in self.backup_dir.iterdir() if f.is_dir()]
+        if not backup_folders:
+            return None
+        
+        backup_folders.sort(key=lambda x: x.name, reverse=True)
+        latest_backup_file = backup_folders[0] / self.save_file_name
+        
+        if latest_backup_file.exists():
+            return self.get_file_hash(latest_backup_file)
+        
+        return None
+    
+    def has_save_file_changed(self) -> bool:
+        """Check if the current save file is different from the latest backup."""
+        if not self.save_file_path.exists():
+            return False
+        
+        # Get current save file hash
+        current_hash = self.get_file_hash(self.save_file_path)
+        if not current_hash:
+            return False
+        
+        # Get hash of latest backup
+        latest_backup_hash = self.get_latest_backup_hash()
+        
+        # If no previous backup exists, consider it changed
+        if latest_backup_hash is None:
+            return True
+        
+        # Check if current hash is different from latest backup
+        return current_hash != latest_backup_hash
+    
     def create_backup(self) -> bool:
-        """Create a timestamped backup of the save file."""
+        """Create a timestamped backup of the save file if it has changed."""
         if not self.save_file_path.exists():
             print(f"Warning: Save file not found at {self.save_file_path}")
+            return False
+        
+        # Check if save file has changed from latest backup
+        if not self.has_save_file_changed():
+            print("Save file unchanged, skipping backup")
             return False
         
         # Create timestamped backup folder
@@ -112,10 +170,10 @@ class AutoSaveMonitor:
                         game_was_running = True
                     
                     # Create backup while game is running
-                    if self.create_backup():
+                    backup_result = self.create_backup()
+                    if backup_result:
                         self.manage_fifo_backups()
-                    else:
-                        print("Failed to create backup")
+                    # Note: create_backup() returns False when file is unchanged (which is correct behavior)
                 
                 elif game_was_running:
                     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Silksong stopped. Monitoring for restart...")
@@ -125,9 +183,12 @@ class AutoSaveMonitor:
                 time.sleep(self.check_interval)
                 
             except KeyboardInterrupt:
+                print("Keyboard interrupt received")
                 break
             except Exception as e:
                 print(f"Unexpected error: {e}")
+                import traceback
+                traceback.print_exc()
                 time.sleep(self.check_interval)
         
         print("Auto Save Monitor - Shutdown complete")
