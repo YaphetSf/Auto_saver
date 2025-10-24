@@ -21,7 +21,10 @@ class AutoSaveMonitor:
     """Main daemon class for monitoring game process and backing up save files."""
     
     def __init__(self):
-        self.save_file_path = Path("/Users/dingzhong/Library/Application Support/unity.Team-Cherry.Silksong/1018808405/user3.dat")
+        # Configuration - Change this to switch save files
+        self.save_file_name = "user1.dat"  # Change to "user1.dat" or "user2.dat" as needed
+        
+        self.save_file_path = Path(f"/Users/dingzhong/Library/Application Support/unity.Team-Cherry.Silksong/1018808405/{self.save_file_name}")
         self.backup_dir = Path("./backups")
         self.max_backups = 100
         self.check_interval = 60  # seconds
@@ -54,7 +57,7 @@ class AutoSaveMonitor:
         # Create timestamped backup folder
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         backup_folder = self.backup_dir / timestamp
-        backup_file = backup_folder / "user3.dat"
+        backup_file = backup_folder / self.save_file_name
         
         try:
             # Create backup directory
