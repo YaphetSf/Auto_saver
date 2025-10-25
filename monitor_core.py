@@ -18,16 +18,29 @@ class AutoSaveMonitor:
     """Main daemon class for monitoring game process and backing up save files."""
     
     def __init__(self, process_name="Silksong", save_file_name="user1.dat", save_file_path=None, 
-                 backup_dir="./backups", max_backups=100, check_interval=60):
+                 backup_dir="./backups", max_backups=100, check_interval=60, backup_mode="file"):
         # Configuration
         self.process_name = process_name
         self.save_file_name = save_file_name
+        self.backup_mode = backup_mode  # "file" or "folder"
         
         # Use provided path or default macOS path
         if save_file_path:
             self.save_file_path = Path(save_file_path)
         else:
             self.save_file_path = Path(f"/Users/dingzhong/Library/Application Support/unity.Team-Cherry.Silksong/1018808405/{self.save_file_name}")
+        
+        # Determine if we're backing up a file or folder
+        if self.backup_mode == "folder" or self.save_file_path.is_dir():
+            self.is_folder_backup = True
+            if save_file_name and save_file_name != "user1.dat":
+                # If we have a specific file name, construct the path
+                self.source_name = self.save_file_path.name
+            else:
+                self.source_name = self.save_file_path.name
+        else:
+            self.is_folder_backup = False
+            self.source_name = save_file_name
         
         self.backup_dir = Path(backup_dir)
         self.max_backups = max_backups
@@ -55,8 +68,25 @@ class AutoSaveMonitor:
         except Exception as e:
             return None
     
+    def get_folder_hash(self, folder_path: Path) -> Optional[str]:
+        """Calculate MD5 hash of a folder for comparison."""
+        try:
+            hash_md5 = hashlib.md5()
+            # Walk through all files in the folder
+            for file_path in sorted(folder_path.rglob("*")):
+                if file_path.is_file():
+                    # Add file path and content to hash
+                    rel_path = file_path.relative_to(folder_path)
+                    hash_md5.update(str(rel_path).encode())
+                    with open(file_path, "rb") as f:
+                        for chunk in iter(lambda: f.read(4096), b""):
+                            hash_md5.update(chunk)
+            return hash_md5.hexdigest()
+        except Exception as e:
+            return None
+    
     def get_latest_backup_hash(self) -> Optional[str]:
-        """Get hash of the most recent backup file for comparison."""
+        """Get hash of the most recent backup for comparison."""
         if not self.backup_dir.exists():
             return None
         
@@ -66,20 +96,30 @@ class AutoSaveMonitor:
             return None
         
         backup_folders.sort(key=lambda x: x.name, reverse=True)
-        latest_backup_file = backup_folders[0] / self.save_file_name
+        latest_backup = backup_folders[0]
         
-        if latest_backup_file.exists():
-            return self.get_file_hash(latest_backup_file)
+        if self.is_folder_backup:
+            # For folder backups, hash the entire folder
+            return self.get_folder_hash(latest_backup)
+        else:
+            # For file backups, hash the specific file
+            latest_backup_file = latest_backup / self.save_file_name
+            if latest_backup_file.exists():
+                return self.get_file_hash(latest_backup_file)
         
         return None
     
     def has_save_file_changed(self) -> bool:
-        """Check if the current save file is different from the latest backup."""
+        """Check if the current save file/folder is different from the latest backup."""
         if not self.save_file_path.exists():
             return False
         
-        # Get current save file hash
-        current_hash = self.get_file_hash(self.save_file_path)
+        # Get current hash (file or folder)
+        if self.is_folder_backup:
+            current_hash = self.get_folder_hash(self.save_file_path)
+        else:
+            current_hash = self.get_file_hash(self.save_file_path)
+        
         if not current_hash:
             return False
         
@@ -94,25 +134,30 @@ class AutoSaveMonitor:
         return current_hash != latest_backup_hash
     
     def create_backup(self) -> bool:
-        """Create a timestamped backup of the save file if it has changed."""
+        """Create a timestamped backup of the save file/folder if it has changed."""
         if not self.save_file_path.exists():
             return False
         
-        # Check if save file has changed from latest backup
+        # Check if save file/folder has changed from latest backup
         if not self.has_save_file_changed():
             return False
         
         # Create timestamped backup folder
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         backup_folder = self.backup_dir / timestamp
-        backup_file = backup_folder / self.save_file_name
         
         try:
             # Create backup directory
             backup_folder.mkdir(parents=True, exist_ok=True)
             
-            # Copy save file to backup location
-            shutil.copy2(self.save_file_path, backup_file)
+            if self.is_folder_backup:
+                # Copy entire folder
+                dest_folder = backup_folder / self.save_file_path.name
+                shutil.copytree(self.save_file_path, dest_folder, dirs_exist_ok=True)
+            else:
+                # Copy single file
+                backup_file = backup_folder / self.save_file_name
+                shutil.copy2(self.save_file_path, backup_file)
             
             return True
             
@@ -152,14 +197,24 @@ class AutoSaveMonitor:
         
         backups = []
         for folder in backup_folders[:limit]:
-            backup_file = folder / self.save_file_name
-            if backup_file.exists():
-                size = backup_file.stat().st_size
+            if self.is_folder_backup:
+                # For folder backups, get the size of the entire folder
+                total_size = sum(f.stat().st_size for f in folder.rglob('*') if f.is_file())
                 backups.append({
                     'timestamp': folder.name,
                     'path': folder,
-                    'size': size
+                    'size': total_size
                 })
+            else:
+                # For file backups, get the size of the specific file
+                backup_file = folder / self.save_file_name
+                if backup_file.exists():
+                    size = backup_file.stat().st_size
+                    backups.append({
+                        'timestamp': folder.name,
+                        'path': folder,
+                        'size': size
+                    })
         
         return backups
     

@@ -6,7 +6,7 @@ Light-themed tkinter GUI for monitoring game save files and creating backups.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, scrolledtext, filedialog
 import threading
 import time
 from datetime import datetime
@@ -29,10 +29,10 @@ class AutoSaveGUI:
         
         # Settings variables
         self.process_name = tk.StringVar(value="Silksong")
-        self.save_file_name = tk.StringVar(value="user1.dat")
+        self.original_path = tk.StringVar(value="/Users/dingzhong/Library/Application Support/unity.Team-Cherry.Silksong/1018808405/user1.dat")
+        self.backup_path = tk.StringVar(value="./backups")
         self.check_interval = tk.StringVar(value="60")
         self.max_backups = tk.StringVar(value="100")
-        self.save_file_path = tk.StringVar(value="/Users/dingzhong/Library/Application Support/unity.Team-Cherry.Silksong/1018808405")
         
         # Status variables
         self.game_status = tk.StringVar(value="Not Running")
@@ -159,19 +159,33 @@ class AutoSaveGUI:
         ttk.Entry(process_frame, textvariable=self.process_name, width=40).grid(
             row=0, column=1, sticky=tk.W, padx=(10, 0), pady=5)
         
-        # Save file settings
-        save_frame = ttk.LabelFrame(settings_frame, text="Save File Settings", padding="10")
-        save_frame.pack(fill=tk.X, pady=(0, 15))
+        # Path settings
+        path_frame = ttk.LabelFrame(settings_frame, text="Path Settings", padding="10")
+        path_frame.pack(fill=tk.X, pady=(0, 15))
         
-        ttk.Label(save_frame, text="Save File:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        save_file_combo = ttk.Combobox(save_frame, textvariable=self.save_file_name, 
-                                       values=["user1.dat", "user2.dat", "user3.dat"], 
-                                       state="readonly", width=37)
-        save_file_combo.grid(row=0, column=1, sticky=tk.W, padx=(10, 0), pady=5)
+        # Original save path (file or folder)
+        ttk.Label(path_frame, text="Original Save Path:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        path_entry_frame = ttk.Frame(path_frame)
+        path_entry_frame.grid(row=0, column=1, sticky=tk.W, padx=(10, 0), pady=5)
         
-        ttk.Label(save_frame, text="Save Path:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(save_frame, textvariable=self.save_file_path, width=40).grid(
-            row=1, column=1, sticky=tk.W, padx=(10, 0), pady=5)
+        self.original_path_entry = ttk.Entry(path_entry_frame, textvariable=self.original_path, width=40)
+        self.original_path_entry.pack(side=tk.LEFT, padx=(0, 5))
+        
+        original_browse_button = ttk.Button(path_entry_frame, text="Browse...", 
+                                           command=self.browse_original_path, width=10)
+        original_browse_button.pack(side=tk.LEFT)
+        
+        # Backup save path (folder only)
+        ttk.Label(path_frame, text="Backup Save Path:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        backup_entry_frame = ttk.Frame(path_frame)
+        backup_entry_frame.grid(row=1, column=1, sticky=tk.W, padx=(10, 0), pady=5)
+        
+        self.backup_path_entry = ttk.Entry(backup_entry_frame, textvariable=self.backup_path, width=40)
+        self.backup_path_entry.pack(side=tk.LEFT, padx=(0, 5))
+        
+        backup_browse_button = ttk.Button(backup_entry_frame, text="Browse...", 
+                                          command=self.browse_backup_path, width=10)
+        backup_browse_button.pack(side=tk.LEFT)
         
         # Backup settings
         backup_frame = ttk.LabelFrame(settings_frame, text="Backup Settings", padding="10")
@@ -294,6 +308,27 @@ class AutoSaveGUI:
             self.log_message("⚠ No backup created. Save file may be unchanged or not found.")
             messagebox.showwarning("Warning", "No backup created. Save file may be unchanged or not found.")
     
+    def browse_original_path(self):
+        """Browse for original save path (file or folder)."""
+        # First try to select a file
+        path = filedialog.askopenfilename(
+            title="Select Original Save File (or Cancel to select folder)",
+            filetypes=[("All files", "*.*"), ("DAT files", "*.dat")]
+        )
+        if path:
+            self.original_path.set(path)
+        else:
+            # If canceled, offer to select a folder instead
+            path = filedialog.askdirectory(title="Select Original Save Folder")
+            if path:
+                self.original_path.set(path)
+    
+    def browse_backup_path(self):
+        """Browse for backup save path (folder only)."""
+        path = filedialog.askdirectory(title="Select Backup Folder")
+        if path:
+            self.backup_path.set(path)
+    
     def apply_settings(self):
         """Apply settings and create monitor instance."""
         try:
@@ -302,20 +337,40 @@ class AutoSaveGUI:
             if self.monitoring_active:
                 self.stop_monitoring()
             
-            # Build full save file path
-            save_file = str(Path(self.save_file_path.get()) / self.save_file_name.get())
+            # Get paths
+            original_path = Path(self.original_path.get())
+            backup_path = Path(self.backup_path.get())
+            
+            # Determine save file name from original path
+            if original_path.is_file():
+                save_file_name = original_path.name
+                save_file_path = str(original_path)
+                backup_mode = "file"
+            elif original_path.is_dir():
+                # If it's a directory, we'll back up the whole folder
+                save_file_name = original_path.name
+                save_file_path = str(original_path)
+                backup_mode = "folder"
+            else:
+                # Treat as file path string
+                save_file_name = Path(self.original_path.get()).name
+                save_file_path = self.original_path.get()
+                backup_mode = "file"
             
             # Create new monitor with settings
             self.monitor = AutoSaveMonitor(
                 process_name=self.process_name.get(),
-                save_file_name=self.save_file_name.get(),
-                save_file_path=save_file,
+                save_file_name=save_file_name,
+                save_file_path=save_file_path,
+                backup_dir=str(backup_path),
                 max_backups=int(self.max_backups.get()),
-                check_interval=int(self.check_interval.get())
+                check_interval=int(self.check_interval.get()),
+                backup_mode=backup_mode
             )
             
-            self.log_message(f"Settings applied - Process: {self.process_name.get()}, File: {self.save_file_name.get()}")
-            self.log_message(f"Save path: {save_file}")
+            self.log_message(f"Settings applied - Process: {self.process_name.get()}")
+            self.log_message(f"Original path: {save_file_path}")
+            self.log_message(f"Backup path: {backup_path}")
             
             # If it was running, restart it
             if was_running:
