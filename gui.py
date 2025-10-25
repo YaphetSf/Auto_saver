@@ -110,10 +110,6 @@ class AutoSaveGUI:
                                       command=self.stop_monitoring, width=15, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=5)
         
-        self.backup_button = ttk.Button(button_frame, text="Backup Now", 
-                                        command=self.manual_backup, width=15)
-        self.backup_button.pack(side=tk.LEFT, padx=5)
-        
         self.clear_log_button = ttk.Button(button_frame, text="Clear Log", 
                                            command=self.clear_log, width=12)
         self.clear_log_button.pack(side=tk.RIGHT, padx=5)
@@ -227,7 +223,6 @@ class AutoSaveGUI:
         # Update UI
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
-        self.backup_button.config(state=tk.NORMAL)
     
     def log_message(self, message):
         """Add a message to the log."""
@@ -250,32 +245,48 @@ class AutoSaveGUI:
         """Run the monitoring loop in background thread."""
         self.log_message("Monitoring started")
         
+        game_was_running = False
+        
         while self.monitoring_active and self.monitor is not None:
             try:
                 is_running = self.monitor.is_game_running()
                 
+                # Only log when game state changes
+                if is_running and not game_was_running:
+                    # Game just started
+                    self.log_message(f"✓ Game started: {self.monitor.process_name}")
+                    game_was_running = True
+                elif not is_running and game_was_running:
+                    # Game just stopped
+                    self.log_message(f"✗ Game stopped: {self.monitor.process_name}")
+                    game_was_running = False
+                
                 if is_running:
                     # Check if save file exists
                     if not self.monitor.save_file_path.exists():
-                        self.log_message(f"Warning: Save file not found at {self.monitor.save_file_path}")
+                        if game_was_running:  # Only log once if we just detected it
+                            self.log_message(f"Warning: Save file not found at {self.monitor.save_file_path}")
+                            game_was_running = False  # Prevent repeated warnings
                     else:
-                        self.log_message(f"Game detected: {self.monitor.process_name} - Checking for changes...")
-                        
                         # Create backup while game is running
                         backup_result = self.monitor.create_backup()
                         if backup_result:
                             self.monitor.manage_fifo_backups()
                             self.log_message(f"✓ Backup created successfully")
                         else:
-                            self.log_message("No changes detected, skipping backup")
-                else:
-                    self.log_message(f"Game not detected: {self.monitor.process_name}")
+                            # Only log "No changes detected" to show it's working
+                            if game_was_running:  # Only log once right after starting
+                                self.log_message("No changes detected, skipping backup")
+                                game_was_running = False  # Prevent repeated "no changes" messages
                 
                 # Sleep for the check interval
                 time.sleep(self.monitor.check_interval)
             except Exception as e:
                 self.log_message(f"Error: {str(e)}")
                 time.sleep(self.monitor.check_interval)
+        
+        if game_was_running:
+            self.log_message(f"✗ Game stopped: {self.monitor.process_name}")
         
         self.log_message("Monitoring stopped")
     
@@ -289,24 +300,6 @@ class AutoSaveGUI:
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         self.log_message("Stop monitoring requested")
-    
-    def manual_backup(self):
-        """Create a manual backup."""
-        if self.monitor is None:
-            self.apply_settings()
-            if self.monitor is None:
-                self.log_message("Error: Monitor not initialized. Cannot create backup.")
-                return
-        
-        self.log_message("Manual backup requested...")
-        success = self.monitor.create_backup()
-        if success:
-            self.monitor.manage_fifo_backups()
-            self.log_message("✓ Manual backup created successfully!")
-            messagebox.showinfo("Success", "Backup created successfully!")
-        else:
-            self.log_message("⚠ No backup created. Save file may be unchanged or not found.")
-            messagebox.showwarning("Warning", "No backup created. Save file may be unchanged or not found.")
     
     def browse_original_path(self):
         """Browse for original save path (file or folder)."""
